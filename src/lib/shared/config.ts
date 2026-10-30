@@ -1,8 +1,8 @@
 // Shared (client + server) configuration types and option catalogs.
 // Nothing in this file may reference secrets.
 
-export type EngineKind = "realtime" | "pipeline";
-export type LlmProvider = "anthropic" | "openai";
+export type EngineKind = "realtime" | "pipeline" | "browser";
+export type LlmProvider = "anthropic" | "openai" | "gemini" | "groq";
 export type SpeechProvider = "openai" | "elevenlabs";
 export type TurnTaking = "patient" | "balanced" | "quick";
 export type MicEnvironment = "near" | "far";
@@ -21,6 +21,8 @@ export interface AgentSettings {
   ttsProvider: SpeechProvider;
   openaiTtsVoice: string;
   elevenlabsVoiceId: string;
+  /** voiceURI of a speechSynthesis voice for Free mode ("" = best match). */
+  browserVoice: string;
   speechRate: number; // 0.8 – 1.2
 }
 
@@ -137,6 +139,7 @@ export const DEFAULT_SETTINGS: AgentSettings = {
   ttsProvider: "openai",
   openaiTtsVoice: "marin",
   elevenlabsVoiceId: "",
+  browserVoice: "",
   speechRate: 1,
 };
 
@@ -150,9 +153,18 @@ export interface ServerCapabilities {
     realtime: string;
     anthropic: string;
     openai: string;
+    gemini: string;
+    groq: string;
   };
   elevenlabsDefaultVoiceId: string;
 }
+
+export const LLM_PROVIDERS: { id: LlmProvider; label: string; envVar: string; free: boolean }[] = [
+  { id: "gemini", label: "Gemini", envVar: "GEMINI_API_KEY", free: true },
+  { id: "groq", label: "Groq", envVar: "GROQ_API_KEY", free: true },
+  { id: "anthropic", label: "Claude", envVar: "ANTHROPIC_API_KEY", free: false },
+  { id: "openai", label: "OpenAI", envVar: "OPENAI_API_KEY", free: false },
+];
 
 export interface ChatTurn {
   role: "user" | "assistant";

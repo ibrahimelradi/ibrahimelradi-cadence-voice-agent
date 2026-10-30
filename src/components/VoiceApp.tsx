@@ -113,7 +113,12 @@ export function VoiceApp() {
 
   const copy = STATUS_COPY[status];
   const title = muted && active ? "Muted" : copy.title;
-  const hint = muted && active ? "Unmute to keep talking." : copy.hint;
+  const hint =
+    muted && active
+      ? "Unmute to keep talking."
+      : status === "speaking" && agent.settings.engine === "browser"
+        ? "Tap the orb or press Interrupt to cut in."
+        : copy.hint;
   const latest = [...entries].reverse().find((e) => e.text.trim());
   const showCaption = active && !(isWide && transcriptOpen) && latest;
 
@@ -127,7 +132,7 @@ export function VoiceApp() {
     else if (status === "speaking") agent.interrupt();
   };
 
-  const engineLabel = agent.settings.engine === "realtime" ? "Realtime" : "Modular";
+  const engineLabel = { realtime: "Realtime", pipeline: "Modular", browser: "Free" }[agent.settings.engine];
 
   return (
     <div className="flex h-dvh w-full overflow-hidden bg-bg text-fg">

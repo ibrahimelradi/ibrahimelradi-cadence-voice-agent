@@ -36,7 +36,7 @@ export const realtimeSessionSchema = personaSchema.extend({
 });
 
 export const chatSchema = personaSchema.extend({
-  provider: z.enum(["anthropic", "openai"]),
+  provider: z.enum(["anthropic", "openai", "gemini", "groq"]),
   history: historySchema.min(1),
 });
 

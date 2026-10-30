@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import {
   LANGUAGES,
   LIMITS,
+  LLM_PROVIDERS,
   OPENAI_TTS_VOICES,
   REALTIME_VOICES,
   STYLES,
@@ -12,6 +13,7 @@ import {
   type ServerCapabilities,
 } from "@/lib/shared/config";
 import { engineBlocker } from "@/hooks/useVoiceAgent";
+import { loadVoices, pickVoice, speechLangTag } from "@/lib/client/browser-engine";
 import { CheckIcon, CloseIcon } from "./icons";
 
 export type Theme = "dark" | "light" | "system";
@@ -126,22 +128,37 @@ export function Settings(props: Props) {
                 unavailable={!!caps && !!engineBlocker({ ...s, engine: "pipeline" }, caps)}
                 body="Pick the brain and the voice separately — Claude or OpenAI for reasoning, OpenAI or ElevenLabs for speech."
               />
+              <EngineCard
+                selected={s.engine === "browser"}
+                onSelect={() => update({ engine: "browser" })}
+                title="Free"
+                badge="No cost"
+                unavailable={!!caps && !!engineBlocker({ ...s, engine: "browser" }, caps)}
+                body="Your browser's built-in speech recognition and voices, with a free AI model (Gemini or Groq). Works best in Chrome or Edge."
+              />
             </div>
             {blocker && <p className="mt-3 text-[12.5px] leading-relaxed text-warn">{blocker}</p>}
           </Section>
 
-          {s.engine === "pipeline" && (
-            <Section title="Providers">
+          {s.engine !== "realtime" && (
+            <Section title={s.engine === "browser" ? "AI model" : "Providers"}>
               <Field label="Reasoning">
                 <Segmented
                   value={s.llmProvider}
                   onChange={(v) => update({ llmProvider: v })}
-                  options={[
-                    { value: "anthropic", label: "Claude", disabled: caps ? !caps.llm.anthropic : false, hint: caps?.models.anthropic },
-                    { value: "openai", label: "OpenAI", disabled: caps ? !caps.llm.openai : false, hint: caps?.models.openai },
-                  ]}
+                  options={LLM_PROVIDERS.map((p) => ({
+                    value: p.id,
+                    label: p.label,
+                    disabled: caps ? !caps.llm[p.id] : false,
+                    hint: caps?.models[p.id],
+                  }))}
                 />
+                {s.engine === "browser" && (
+                  <p className="mt-2 text-[12px] text-fg-subtle">Gemini and Groq offer free API keys with daily limits.</p>
+                )}
               </Field>
+              {s.engine === "pipeline" && (
+              <>
               <Field label="Speech recognition">
                 <Segmented
                   value={s.sttProvider}
@@ -162,12 +179,16 @@ export function Settings(props: Props) {
                   ]}
                 />
               </Field>
+              </>
+              )}
             </Section>
           )}
 
           <Section title="Voice">
             {s.engine === "realtime" ? (
               <VoiceChips voices={REALTIME_VOICES} value={s.realtimeVoice} onChange={(v) => update({ realtimeVoice: v })} />
+            ) : s.engine === "browser" ? (
+              <BrowserVoicePicker language={s.language} value={s.browserVoice} onChange={(v) => update({ browserVoice: v })} />
             ) : s.ttsProvider === "openai" ? (
               <VoiceChips voices={OPENAI_TTS_VOICES} value={s.openaiTtsVoice} onChange={(v) => update({ openaiTtsVoice: v })} />
             ) : (
@@ -287,6 +308,8 @@ export function Settings(props: Props) {
                 <KeyRow name="OPENAI_API_KEY" ok={caps.realtime} />
                 <KeyRow name="ANTHROPIC_API_KEY" ok={caps.llm.anthropic} />
                 <KeyRow name="ELEVENLABS_API_KEY" ok={caps.tts.elevenlabs} />
+                <KeyRow name="GEMINI_API_KEY" ok={caps.llm.gemini} />
+                <KeyRow name="GROQ_API_KEY" ok={caps.llm.groq} />
               </ul>
               <p className="mt-3 text-[12px] leading-relaxed text-fg-subtle">
                 Keys live only on the server. Audio and transcripts are never stored.
@@ -448,5 +471,62 @@ function KeyRow({ name, ok }: { name: string; ok: boolean }) {
         {ok ? "Configured" : "Not set"}
       </span>
     </li>
+  );
+}
+
+function BrowserVoicePicker({
+  language,
+  value,
+  onChange,
+}: {
+  language: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[] | null>(null);
+
+  useEffect(() => {
+    if (!("speechSynthesis" in window)) return;
+    let cancelled = false;
+    const refresh = () => void loadVoices().then((v) => !cancelled && setVoices(v));
+    refresh();
+    window.speechSynthesis.addEventListener("voiceschanged", refresh);
+    return () => {
+      cancelled = true;
+      window.speechSynthesis.removeEventListener("voiceschanged", refresh);
+    };
+  }, []);
+
+  if (voices === null) {
+    return <p className="text-[12.5px] text-fg-subtle">Loading your browser&apos;s voices…</p>;
+  }
+  if (!voices.length) {
+    return <p className="text-[12.5px] text-warn">This browser has no built-in voices. Try Chrome or Edge.</p>;
+  }
+
+  const tag = speechLangTag(language);
+  const base = tag.split("-")[0]!.toLowerCase();
+  const matching = voices.filter((v) => v.lang.toLowerCase().startsWith(base));
+  const list = (matching.length ? matching : voices).slice().sort((a, b) => a.name.localeCompare(b.name));
+  const auto = pickVoice(voices, tag, "");
+
+  return (
+    <div>
+      <select
+        value={list.some((v) => v.voiceURI === value) ? value : ""}
+        onChange={(e) => onChange(e.target.value)}
+        className="h-10 w-full rounded-lg border border-line bg-elevated px-3 text-[14px] text-fg outline-none focus:border-line-strong"
+      >
+        <option value="">Best available{auto ? ` (${auto.name})` : ""}</option>
+        {list.map((v) => (
+          <option key={v.voiceURI} value={v.voiceURI}>
+            {v.name} · {v.lang}
+          </option>
+        ))}
+      </select>
+      <p className="mt-2 text-[12px] leading-relaxed text-fg-subtle">
+        Voices come from your browser and device. &quot;Natural&quot; and &quot;Google&quot; voices usually sound best.
+      </p>
+    </div>
   );
 }

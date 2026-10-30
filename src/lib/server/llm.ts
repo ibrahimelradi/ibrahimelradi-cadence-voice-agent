@@ -29,7 +29,56 @@ export interface StreamArgs {
 
 /** Yields text deltas from the configured LLM provider. */
 export function streamReply(args: StreamArgs): AsyncGenerator<string> {
-  return args.provider === "anthropic" ? streamAnthropic(args) : streamOpenAI(args);
+  return args.provider === "anthropic" ? streamAnthropic(args) : streamChatCompletions(args);
+}
+
+/** Providers served through an OpenAI-compatible Chat Completions endpoint. */
+interface CompatProvider {
+  name: string;
+  envVar: string;
+  key: () => string | undefined;
+  url: () => string;
+  model: () => string;
+  effort: () => string | undefined;
+  maxTokensParam: "max_tokens" | "max_completion_tokens";
+}
+
+const COMPAT: Record<Exclude<LlmProvider, "anthropic">, CompatProvider> = {
+  openai: {
+    name: "OpenAI",
+    envVar: "OPENAI_API_KEY",
+    key: env.openaiKey,
+    url: () => `${env.openaiBaseUrl()}/chat/completions`,
+    model: env.openaiChatModel,
+    effort: env.openaiReasoningEffort,
+    maxTokensParam: "max_completion_tokens",
+  },
+  gemini: {
+    name: "Gemini",
+    envVar: "GEMINI_API_KEY",
+    key: env.geminiKey,
+    url: () => "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+    model: env.geminiModel,
+    effort: env.geminiReasoningEffort,
+    maxTokensParam: "max_tokens",
+  },
+  groq: {
+    name: "Groq",
+    envVar: "GROQ_API_KEY",
+    key: env.groqKey,
+    url: () => "https://api.groq.com/openai/v1/chat/completions",
+    model: env.groqModel,
+    effort: () => undefined,
+    maxTokensParam: "max_tokens",
+  },
+};
+
+export function isProviderConfigured(provider: LlmProvider): boolean {
+  return provider === "anthropic" ? !!env.anthropicKey() : !!COMPAT[provider].key();
+}
+
+export function providerEnvVar(provider: LlmProvider): string {
+  return provider === "anthropic" ? "ANTHROPIC_API_KEY" : COMPAT[provider].envVar;
 }
 
 // ---- Anthropic (Claude) -----------------------------------------------------
@@ -101,22 +150,23 @@ function mapAnthropicError(err: unknown, signal: AbortSignal): unknown {
   return err;
 }
 
-// ---- OpenAI -----------------------------------------------------------------
+// ---- OpenAI-compatible (OpenAI, Gemini, Groq) --------------------------------
 
-async function* streamOpenAI({ system, history, signal }: StreamArgs): AsyncGenerator<string> {
-  const key = env.openaiKey();
-  if (!key) throw notConfigured("OpenAI", "OPENAI_API_KEY");
-  const effort = env.openaiReasoningEffort();
+async function* streamChatCompletions({ provider, system, history, signal }: StreamArgs): AsyncGenerator<string> {
+  const p = COMPAT[provider as Exclude<LlmProvider, "anthropic">];
+  const key = p.key();
+  if (!key) throw notConfigured(p.name, p.envVar);
+  const effort = p.effort();
 
   let res: Response;
   try {
-    res = await fetch(`${env.openaiBaseUrl()}/chat/completions`, {
+    res = await fetch(p.url(), {
       method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: env.openaiChatModel(),
+        model: p.model(),
         stream: true,
-        max_completion_tokens: 4096,
+        [p.maxTokensParam]: 4096,
         ...(effort ? { reasoning_effort: effort } : {}),
         messages: [
           { role: "system", content: system },
@@ -127,10 +177,10 @@ async function* streamOpenAI({ system, history, signal }: StreamArgs): AsyncGene
     });
   } catch (err) {
     if (signal.aborted) throw new ApiError(499, "aborted", "Request aborted.");
-    console.error("[api] OpenAI connection error", err);
-    throw new ApiError(502, "provider_unavailable", "Could not reach OpenAI.", "OpenAI");
+    console.error(`[api] ${p.name} connection error`, err);
+    throw new ApiError(502, "provider_unavailable", `Could not reach ${p.name}.`, p.name);
   }
-  if (!res.ok || !res.body) throw await upstreamError("OpenAI", res);
+  if (!res.ok || !res.body) throw await upstreamError(p.name, res);
 
   const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
   let buf = "";
@@ -148,7 +198,7 @@ async function* streamOpenAI({ system, history, signal }: StreamArgs): AsyncGene
         if (data === "[DONE]") return;
         try {
           const j = JSON.parse(data);
-          if (j.error) throw new ApiError(502, "provider_error", `OpenAI error: ${j.error.message}`, "OpenAI");
+          if (j.error) throw new ApiError(502, "provider_error", `${p.name} error: ${j.error.message}`, p.name);
           const delta: string | undefined = j.choices?.[0]?.delta?.content;
           if (delta) yield delta;
         } catch (e) {

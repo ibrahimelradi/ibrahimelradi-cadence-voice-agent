@@ -3,10 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   DEFAULT_SETTINGS,
+  LLM_PROVIDERS,
   type AgentSettings,
   type ChatTurn,
   type ServerCapabilities,
 } from "@/lib/shared/config";
+import { BrowserEngine } from "@/lib/client/browser-engine";
 import { PipelineEngine } from "@/lib/client/pipeline-engine";
 import { RealtimeEngine } from "@/lib/client/realtime-engine";
 import {
@@ -32,14 +34,22 @@ function loadSettings(): AgentSettings {
   return DEFAULT_SETTINGS;
 }
 
+const llmEnvVar = (p: AgentSettings["llmProvider"]) => LLM_PROVIDERS.find((x) => x.id === p)!.envVar;
+
 /** Why a configuration can't run, or null if it can. */
 export function engineBlocker(s: AgentSettings, caps: ServerCapabilities | null): string | null {
   if (!caps) return null;
   if (s.engine === "realtime") {
     return caps.realtime ? null : "Realtime mode needs OPENAI_API_KEY on the server.";
   }
+  if (s.engine === "browser") {
+    if (caps.llm[s.llmProvider]) return null;
+    return LLM_PROVIDERS.some((p) => caps.llm[p.id])
+      ? `Choose an AI model that's configured, or add ${llmEnvVar(s.llmProvider)} on the server.`
+      : "Free mode needs a free GEMINI_API_KEY (or GROQ_API_KEY) on the server.";
+  }
   const missing: string[] = [];
-  if (!caps.llm[s.llmProvider]) missing.push(s.llmProvider === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY");
+  if (!caps.llm[s.llmProvider]) missing.push(llmEnvVar(s.llmProvider));
   if (!caps.stt[s.sttProvider]) missing.push(s.sttProvider === "openai" ? "OPENAI_API_KEY" : "ELEVENLABS_API_KEY");
   if (!caps.tts[s.ttsProvider]) missing.push(s.ttsProvider === "openai" ? "OPENAI_API_KEY" : "ELEVENLABS_API_KEY");
   const uniq = [...new Set(missing)];
@@ -49,11 +59,15 @@ export function engineBlocker(s: AgentSettings, caps: ServerCapabilities | null)
 /** Choose a runnable configuration based on what the server has configured. */
 function reconcile(s: AgentSettings, caps: ServerCapabilities): AgentSettings {
   const next = { ...s };
-  if (!caps.llm[next.llmProvider]) next.llmProvider = caps.llm.anthropic ? "anthropic" : "openai";
+  if (!caps.llm[next.llmProvider]) {
+    next.llmProvider = (["anthropic", "openai", "gemini", "groq"] as const).find((p) => caps.llm[p]) ?? next.llmProvider;
+  }
   if (!caps.stt[next.sttProvider]) next.sttProvider = caps.stt.openai ? "openai" : "elevenlabs";
   if (!caps.tts[next.ttsProvider]) next.ttsProvider = caps.tts.openai ? "openai" : "elevenlabs";
-  if (next.engine === "realtime" && !caps.realtime && !engineBlocker({ ...next, engine: "pipeline" }, caps)) {
-    next.engine = "pipeline";
+  if (engineBlocker(next, caps)) {
+    // Fall back to whichever engine the server can actually run.
+    const runnable = (["realtime", "pipeline", "browser"] as const).find((e) => !engineBlocker({ ...next, engine: e }, caps));
+    if (runnable) next.engine = runnable;
   }
   return next;
 }
@@ -201,7 +215,11 @@ export function useVoiceAgent() {
       history,
     };
     const engine: VoiceEngine =
-      s.engine === "realtime" ? new RealtimeEngine(s, events) : new PipelineEngine(s, events);
+      s.engine === "realtime"
+        ? new RealtimeEngine(s, events)
+        : s.engine === "browser"
+          ? new BrowserEngine(s, events)
+          : new PipelineEngine(s, events);
     engineRef.current = engine;
     setMutedState(false);
 

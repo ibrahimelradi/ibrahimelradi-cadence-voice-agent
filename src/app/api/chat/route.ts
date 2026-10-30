@@ -1,4 +1,3 @@
-import { env } from "@/lib/server/env";
 import {
   ApiError,
   assertSameOrigin,
@@ -7,7 +6,7 @@ import {
   rateLimit,
   readJson,
 } from "@/lib/server/http";
-import { normalizeHistory, streamReply } from "@/lib/server/llm";
+import { isProviderConfigured, normalizeHistory, providerEnvVar, streamReply } from "@/lib/server/llm";
 import { buildSystemPrompt } from "@/lib/server/prompts";
 import { chatSchema, parse } from "@/lib/server/schemas";
 
@@ -21,10 +20,10 @@ export async function POST(req: Request) {
     assertSameOrigin(req);
     rateLimit(req, "chat", 40);
     input = parse(chatSchema, await readJson(req));
-    if (input.provider === "anthropic" && !env.anthropicKey())
-      throw notConfigured("Anthropic", "ANTHROPIC_API_KEY");
-    if (input.provider === "openai" && !env.openaiKey())
-      throw notConfigured("OpenAI", "OPENAI_API_KEY");
+    if (!isProviderConfigured(input.provider)) {
+      const label = { anthropic: "Anthropic", openai: "OpenAI", gemini: "Gemini", groq: "Groq" }[input.provider];
+      throw notConfigured(label, providerEnvVar(input.provider));
+    }
   } catch (err) {
     return errorResponse(err);
   }

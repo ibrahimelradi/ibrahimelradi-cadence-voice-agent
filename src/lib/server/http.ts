@@ -42,7 +42,8 @@ export async function upstreamError(provider: string, res: Response): Promise<Ap
   try {
     const text = await res.text();
     try {
-      const j = JSON.parse(text);
+      let j = JSON.parse(text);
+      if (Array.isArray(j)) j = j[0]; // Gemini wraps errors in an array
       detail =
         j?.error?.message ?? j?.detail?.message ?? j?.detail ?? j?.message ?? text;
     } catch {
@@ -54,7 +55,7 @@ export async function upstreamError(provider: string, res: Response): Promise<Ap
   detail = String(detail).slice(0, 300);
   console.error(`[api] ${provider} upstream ${res.status}: ${detail}`);
 
-  if (res.status === 401 || res.status === 403)
+  if (res.status === 401 || res.status === 403 || /api[ _-]?key/i.test(detail))
     return new ApiError(502, "provider_auth", `${provider} rejected the API key. Check your credentials.`, provider);
   if (res.status === 429)
     return new ApiError(429, "provider_rate_limited", `${provider} is rate limiting requests. Try again shortly.`, provider);

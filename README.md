@@ -2,10 +2,11 @@
 
 Cadence is a real-time voice assistant built with Next.js. You talk, it listens, thinks, and talks back, and you can interrupt it mid-sentence.
 
-It has two conversation engines behind one interface:
+It has three conversation engines behind one interface:
 
 | Engine | How it works | Best for |
 |---|---|---|
+| **Free** | The browser's built-in speech recognition and voices (Web Speech API) + a free-tier AI model (**Gemini** or **Groq**) | Trying it at no cost |
 | **Realtime** (default) | Browser ⇄ OpenAI Realtime over **WebRTC**. Speech-to-speech in one model, with server-side semantic turn detection and native barge-in. | Lowest latency, most natural turn-taking |
 | **Modular** | Browser VAD → **STT** (OpenAI or ElevenLabs) → **LLM** (Claude or OpenAI, streamed) → sentence-by-sentence **TTS** (OpenAI or ElevenLabs) | Choosing the brain and the voice separately, e.g. Claude + ElevenLabs |
 
@@ -23,6 +24,7 @@ Microphone access requires a **secure context**: `localhost` works, and any othe
 
 | You want | Set |
 |---|---|
+| **Free mode** | `GEMINI_API_KEY` (free at [aistudio.google.com](https://aistudio.google.com/apikey)) or `GROQ_API_KEY` (free at [console.groq.com](https://console.groq.com/keys)) |
 | Realtime mode | `OPENAI_API_KEY` |
 | Modular with Claude + OpenAI voice | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` |
 | Modular with Claude + ElevenLabs voice | `ANTHROPIC_API_KEY`, `ELEVENLABS_API_KEY` |
@@ -37,6 +39,7 @@ All tunables (models, effort, voices, base URLs, allowed origins, rate limiting)
 | Realtime model | `gpt-realtime-2.1` (transcripts via `gpt-4o-mini-transcribe`) |
 | Claude model | `claude-opus-5-5`, `effort: low` for snappy spoken replies, server-side refusal fallback enabled |
 | OpenAI chat model | `gpt-5-mini` |
+| Gemini / Groq (Free mode) | `gemini-flash-latest` / `llama-3.3-70b-versatile` |
 | OpenAI STT / TTS | `gpt-4o-mini-transcribe` / `gpt-4o-mini-tts` (style-steered via `instructions`) |
 | ElevenLabs STT / TTS | `scribe_v2` / `eleven_flash_v2_5` |
 
@@ -52,13 +55,21 @@ All tunables (models, effort, voices, base URLs, allowed origins, rate limiting)
 - **Resilience**: friendly messages for mic denied / missing / busy, insecure context, missing keys, provider auth or rate-limit or outage errors. Dropped WebRTC connections auto-reconnect (max 2 per minute). Speech-model hallucinations on silence are filtered out.
 - **UI**: an animated orb with distinct listening, hearing, thinking, and speaking states; dark and light themes; responsive layout (side panel on desktop, bottom sheet on mobile); reduced-motion support.
 
+## Free mode notes
+
+- Works best in **Chrome or Edge**. Firefox has no built-in speech recognition, so the app tells you to switch browsers.
+- In Chrome, speech recognition is processed by Google's servers, so it needs an internet connection.
+- Voices come from your device, so quality varies. Edge's "Natural" voices and Chrome's "Google" voices usually sound best; pick one in Settings → Voice.
+- The microphone pauses while the assistant talks so it doesn't hear itself. To cut in, tap the orb or press **Interrupt** (`Esc`).
+- Free API tiers have daily request limits. When you hit one, the app shows the provider's rate-limit message.
+
 ## Architecture
 
 ```
 src/
 ├─ app/api/
 │  ├─ realtime/session   POST  mint a 120s OpenAI Realtime client secret (instructions built server-side)
-│  ├─ chat               POST  stream LLM reply as NDJSON (Claude via @anthropic-ai/sdk, or OpenAI)
+│  ├─ chat               POST  stream LLM reply as NDJSON (Claude via @anthropic-ai/sdk; OpenAI, Gemini, Groq)
 │  ├─ transcribe         POST  multipart WAV → text (OpenAI / ElevenLabs)
 │  ├─ tts                POST  text → streamed MP3 (OpenAI / ElevenLabs)
 │  ├─ voices             GET   list ElevenLabs voices
@@ -67,6 +78,7 @@ src/
 ├─ lib/client/
 │  ├─ realtime-engine.ts WebRTC peer connection + `oai-events` data channel
 │  ├─ pipeline-engine.ts AudioWorklet capture, VAD, STT → LLM → TTS, barge-in
+│  ├─ browser-engine.ts  Free mode: Web Speech recognition + speechSynthesis
 │  ├─ vad.ts             energy VAD with adaptive noise floor
 │  ├─ player.ts          ordered, gapless clip playback (prefetches next sentence)
 │  └─ sentences.ts       streaming sentence chunker (short first chunk for fast first word)

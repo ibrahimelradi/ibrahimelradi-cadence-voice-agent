@@ -10,6 +10,13 @@ export const env = {
   openaiKey: () => read("OPENAI_API_KEY"),
   anthropicKey: () => read("ANTHROPIC_API_KEY"),
   elevenlabsKey: () => read("ELEVENLABS_API_KEY"),
+  geminiKey: () => read("GEMINI_API_KEY"),
+  groqKey: () => read("GROQ_API_KEY"),
+
+  // Free-tier friendly models. "gemini-flash-latest" tracks Google's current Flash model.
+  geminiModel: () => read("GEMINI_MODEL") ?? "gemini-flash-latest",
+  geminiReasoningEffort: () => read("GEMINI_REASONING_EFFORT"),
+  groqModel: () => read("GROQ_MODEL") ?? "llama-3.3-70b-versatile",
 
   openaiBaseUrl: () => (read("OPENAI_BASE_URL") ?? "https://api.openai.com/v1").replace(/\/+$/, ""),
   elevenlabsBaseUrl: () => (read("ELEVENLABS_BASE_URL") ?? "https://api.elevenlabs.io").replace(/\/+$/, ""),
@@ -45,15 +52,19 @@ export function capabilities(): ServerCapabilities {
   const openai = !!env.openaiKey();
   const anthropic = !!env.anthropicKey();
   const eleven = !!env.elevenlabsKey();
+  const gemini = !!env.geminiKey();
+  const groq = !!env.groqKey();
   return {
     realtime: openai,
-    llm: { anthropic, openai },
+    llm: { anthropic, openai, gemini, groq },
     stt: { openai, elevenlabs: eleven },
     tts: { openai, elevenlabs: eleven },
     models: {
       realtime: env.realtimeModel(),
       anthropic: env.anthropicModel(),
       openai: env.openaiChatModel(),
+      gemini: env.geminiModel(),
+      groq: env.groqModel(),
     },
     elevenlabsDefaultVoiceId: env.elevenlabsVoiceId(),
   };
