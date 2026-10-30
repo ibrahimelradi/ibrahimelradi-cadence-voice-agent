@@ -38,7 +38,8 @@ interface CompatProvider {
   envVar: string;
   key: () => string | undefined;
   url: () => string;
-  model: () => string;
+  /** Models to try in order; later ones are fallbacks for overload / outages. */
+  models: () => string[];
   effort: () => string | undefined;
   maxTokensParam: "max_tokens" | "max_completion_tokens";
 }
@@ -49,7 +50,7 @@ const COMPAT: Record<Exclude<LlmProvider, "anthropic">, CompatProvider> = {
     envVar: "OPENAI_API_KEY",
     key: env.openaiKey,
     url: () => `${env.openaiBaseUrl()}/chat/completions`,
-    model: env.openaiChatModel,
+    models: () => [env.openaiChatModel()],
     effort: env.openaiReasoningEffort,
     maxTokensParam: "max_completion_tokens",
   },
@@ -57,8 +58,8 @@ const COMPAT: Record<Exclude<LlmProvider, "anthropic">, CompatProvider> = {
     name: "Gemini",
     envVar: "GEMINI_API_KEY",
     key: env.geminiKey,
-    url: () => "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-    model: env.geminiModel,
+    url: () => `${env.geminiBaseUrl()}/chat/completions`,
+    models: () => [env.geminiModel(), ...env.geminiFallbackModels()],
     effort: env.geminiReasoningEffort,
     maxTokensParam: "max_tokens",
   },
@@ -67,7 +68,7 @@ const COMPAT: Record<Exclude<LlmProvider, "anthropic">, CompatProvider> = {
     envVar: "GROQ_API_KEY",
     key: env.groqKey,
     url: () => "https://api.groq.com/openai/v1/chat/completions",
-    model: env.groqModel,
+    models: () => [env.groqModel(), ...env.groqFallbackModels()],
     effort: () => undefined,
     maxTokensParam: "max_tokens",
   },
@@ -152,35 +153,81 @@ function mapAnthropicError(err: unknown, signal: AbortSignal): unknown {
 
 // ---- OpenAI-compatible (OpenAI, Gemini, Groq) --------------------------------
 
+/** Overloaded, rate limited, or model missing: worth trying again or another model. */
+const RETRYABLE = new Set([404, 408, 429, 500, 502, 503, 504]);
+
+const sleep = (ms: number, signal: AbortSignal) =>
+  new Promise<void>((resolve) => {
+    const t = setTimeout(resolve, ms);
+    signal.addEventListener("abort", () => (clearTimeout(t), resolve()), { once: true });
+  });
+
+/**
+ * Opens a streaming completion, retrying a busy model once and then falling
+ * back through the provider's other models before giving up.
+ */
+async function openCompletionStream(
+  p: CompatProvider,
+  key: string,
+  system: string,
+  history: ChatTurn[],
+  signal: AbortSignal,
+): Promise<Response & { body: ReadableStream<Uint8Array> }> {
+  const models = [...new Set(p.models())];
+  const effort = p.effort();
+  // Report the main model's failure: it's the most meaningful one.
+  let firstError: ApiError | null = null;
+
+  for (const [i, model] of models.entries()) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let res: Response;
+      try {
+        res = await fetch(p.url(), {
+          method: "POST",
+          headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model,
+            stream: true,
+            [p.maxTokensParam]: 4096,
+            ...(effort ? { reasoning_effort: effort } : {}),
+            messages: [
+              { role: "system", content: system },
+              ...history.map((t) => ({ role: t.role, content: t.text })),
+            ],
+          }),
+          signal,
+        });
+      } catch (err) {
+        if (signal.aborted) throw new ApiError(499, "aborted", "Request aborted.");
+        console.error(`[api] ${p.name} connection error`, err);
+        throw new ApiError(502, "provider_unavailable", `Could not reach ${p.name}.`, p.name);
+      }
+      if (res.ok && res.body) {
+        if (i > 0) console.warn(`[api] ${p.name}: served by fallback model ${model}`);
+        return res as Response & { body: ReadableStream<Uint8Array> };
+      }
+      const status = res.status;
+      const error = await upstreamError(p.name, res, model);
+      if (!RETRYABLE.has(status)) throw error;
+      firstError ??= error;
+      // Retry the same model once on a transient overload, then move on.
+      if (attempt === 0 && status >= 500) {
+        await sleep(800, signal);
+        if (signal.aborted) throw new ApiError(499, "aborted", "Request aborted.");
+        continue;
+      }
+      break;
+    }
+  }
+  throw firstError ?? new ApiError(502, "provider_unavailable", `${p.name} is temporarily unavailable.`, p.name);
+}
+
 async function* streamChatCompletions({ provider, system, history, signal }: StreamArgs): AsyncGenerator<string> {
   const p = COMPAT[provider as Exclude<LlmProvider, "anthropic">];
   const key = p.key();
   if (!key) throw notConfigured(p.name, p.envVar);
-  const effort = p.effort();
 
-  let res: Response;
-  try {
-    res = await fetch(p.url(), {
-      method: "POST",
-      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: p.model(),
-        stream: true,
-        [p.maxTokensParam]: 4096,
-        ...(effort ? { reasoning_effort: effort } : {}),
-        messages: [
-          { role: "system", content: system },
-          ...history.map((t) => ({ role: t.role, content: t.text })),
-        ],
-      }),
-      signal,
-    });
-  } catch (err) {
-    if (signal.aborted) throw new ApiError(499, "aborted", "Request aborted.");
-    console.error(`[api] ${p.name} connection error`, err);
-    throw new ApiError(502, "provider_unavailable", `Could not reach ${p.name}.`, p.name);
-  }
-  if (!res.ok || !res.body) throw await upstreamError(p.name, res);
+  const res = await openCompletionStream(p, key, system, history, signal);
 
   const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
   let buf = "";

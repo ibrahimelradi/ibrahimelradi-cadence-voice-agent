@@ -6,6 +6,13 @@ function read(name: string): string | undefined {
   return v ? v : undefined;
 }
 
+function list(v: string): string[] {
+  return v
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 export const env = {
   openaiKey: () => read("OPENAI_API_KEY"),
   anthropicKey: () => read("ANTHROPIC_API_KEY"),
@@ -13,12 +20,21 @@ export const env = {
   geminiKey: () => read("GEMINI_API_KEY"),
   groqKey: () => read("GROQ_API_KEY"),
 
-  // Free-tier friendly models. "gemini-flash-latest" tracks Google's current Flash model.
-  geminiModel: () => read("GEMINI_MODEL") ?? "gemini-flash-latest",
-  geminiReasoningEffort: () => read("GEMINI_REASONING_EFFORT"),
+  // Free-tier friendly models. When the first is overloaded or unavailable,
+  // the next ones are tried in order.
+  geminiModel: () => read("GEMINI_MODEL") ?? "gemini-3.8-flash",
+  geminiFallbackModels: () => list(read("GEMINI_FALLBACK_MODELS") ?? "gemini-3.5-flash-lite,gemini-flash-latest"),
+  // "low" keeps spoken replies quick on Gemini's thinking models; set "none" to unset.
+  geminiReasoningEffort: () => {
+    const v = read("GEMINI_REASONING_EFFORT") ?? "low";
+    return v === "none" ? undefined : v;
+  },
   groqModel: () => read("GROQ_MODEL") ?? "llama-3.3-70b-versatile",
+  groqFallbackModels: () => list(read("GROQ_FALLBACK_MODELS") ?? "llama-3.1-8b-instant"),
 
   openaiBaseUrl: () => (read("OPENAI_BASE_URL") ?? "https://api.openai.com/v1").replace(/\/+$/, ""),
+  geminiBaseUrl: () =>
+    (read("GEMINI_BASE_URL") ?? "https://generativelanguage.googleapis.com/v1beta/openai").replace(/\/+$/, ""),
   elevenlabsBaseUrl: () => (read("ELEVENLABS_BASE_URL") ?? "https://api.elevenlabs.io").replace(/\/+$/, ""),
 
   realtimeModel: () => read("OPENAI_REALTIME_MODEL") ?? "gpt-realtime-2.1",

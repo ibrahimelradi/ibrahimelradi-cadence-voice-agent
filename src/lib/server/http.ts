@@ -37,7 +37,7 @@ export function notConfigured(provider: string, envVar: string): ApiError {
 }
 
 /** Translate a non-2xx upstream provider response into an ApiError. */
-export async function upstreamError(provider: string, res: Response): Promise<ApiError> {
+export async function upstreamError(provider: string, res: Response, model?: string): Promise<ApiError> {
   let detail = "";
   try {
     const text = await res.text();
@@ -52,16 +52,21 @@ export async function upstreamError(provider: string, res: Response): Promise<Ap
   } catch {
     /* ignore */
   }
-  detail = String(detail).slice(0, 300);
-  console.error(`[api] ${provider} upstream ${res.status}: ${detail}`);
+  detail = String(detail).replace(/\s+/g, " ").trim().slice(0, 300);
+  const where = model ? ` (${model})` : "";
+  console.error(`[api] ${provider}${where} upstream ${res.status}: ${detail}`);
+  // Short provider reason, shown to the user to make problems diagnosable.
+  const reason = detail ? ` ${provider} said: "${detail.slice(0, 160)}"` : "";
 
   if (res.status === 401 || res.status === 403 || /api[ _-]?key/i.test(detail))
-    return new ApiError(502, "provider_auth", `${provider} rejected the API key. Check your credentials.`, provider);
+    return new ApiError(502, "provider_auth", `${provider} rejected the API key. Check your credentials.${reason}`, provider);
   if (res.status === 429)
-    return new ApiError(429, "provider_rate_limited", `${provider} is rate limiting requests. Try again shortly.`, provider);
+    return new ApiError(429, "provider_rate_limited", `${provider} is rate limiting requests or the free daily limit was reached. Try again shortly.${reason}`, provider);
+  if (res.status === 404)
+    return new ApiError(502, "provider_model", `${provider} model${where} isn't available to your key.${reason}`, provider);
   if (res.status >= 500)
-    return new ApiError(502, "provider_unavailable", `${provider} is temporarily unavailable.`, provider);
-  return new ApiError(502, "provider_error", `${provider} error: ${detail || res.statusText}`, provider);
+    return new ApiError(502, "provider_unavailable", `${provider} is temporarily unavailable (error ${res.status}).${reason}`, provider);
+  return new ApiError(502, "provider_error", `${provider} error${where}: ${detail || res.statusText}`, provider);
 }
 
 export function clientIp(req: Request): string {

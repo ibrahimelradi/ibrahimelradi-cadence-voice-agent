@@ -39,7 +39,7 @@ All tunables (models, effort, voices, base URLs, allowed origins, rate limiting)
 | Realtime model | `gpt-realtime-2.1` (transcripts via `gpt-4o-mini-transcribe`) |
 | Claude model | `claude-opus-5-5`, `effort: low` for snappy spoken replies, server-side refusal fallback enabled |
 | OpenAI chat model | `gpt-5-mini` |
-| Gemini / Groq (Free mode) | `gemini-flash-latest` / `llama-3.3-70b-versatile` |
+| Gemini / Groq (Free mode) | `gemini-3.8-flash` / `llama-3.3-70b-versatile`, with automatic retry and fallback models when busy |
 | OpenAI STT / TTS | `gpt-4o-mini-transcribe` / `gpt-4o-mini-tts` (style-steered via `instructions`) |
 | ElevenLabs STT / TTS | `scribe_v2` / `eleven_flash_v2_5` |
 
